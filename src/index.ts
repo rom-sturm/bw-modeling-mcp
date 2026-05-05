@@ -19,6 +19,7 @@ import { bwCreateInfoArea, bwMoveObject, bwGetInfoarea } from './tools/infoarea.
 import { bwCreateInfosource, bwUpdateInfosource, bwGetInfosource, InfosourceField } from './tools/infosource.js';
 import { bwPushData, bwGetPushSchema } from './tools/push.js';
 import { bwGetQuery } from './tools/query.js';
+import { bwQueryData, QueryDataParams } from './tools/querydata.js';
 
 // Single shared client instance (CSRF token + session cookies are reused)
 const client = createClientFromEnv();
@@ -1096,6 +1097,160 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['query_name'],
       },
     },
+    {
+      name: 'bw_query_data',
+      description:
+        'Execute a BEx Query or preview data from an InfoProvider (aDSO, CompositeProvider) via the ' +
+        'BICS/InA reporting endpoint. Supports variable input, axis layout control (ROWS/COLUMNS/FREE), ' +
+        'characteristic filters with include/exclude and range operators, hierarchy drill-down ' +
+        '(expand/collapse nodes), structure member selection, and pagination. ' +
+        'Returns a formatted table with hierarchy indentation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          provider_name: {
+            type: 'string',
+            description: 'Technical name of the BEx Query or InfoProvider (aDSO, CompositeProvider).',
+          },
+          provider_type: {
+            type: 'string',
+            enum: ['QUERY', 'ADSO', 'HCPR'],
+            description:
+              'Provider type: QUERY (default) for BEx Queries, ADSO for Advanced DSOs, ' +
+              'HCPR for CompositeProviders.',
+          },
+          variables: {
+            type: 'array',
+            description: 'Variable values to submit. Omit to use variable defaults or leave variables empty.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: 'Technical name of the variable.' },
+                values: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      low: { type: 'string', description: 'Low value (or single value for EQ).' },
+                      high: { type: 'string', description: 'High value for BT (between) ranges.' },
+                      option: {
+                        type: 'string',
+                        enum: ['EQ', 'BT', 'LT', 'LE', 'GT', 'GE', 'NE'],
+                        description: 'Selection option. Default: EQ.',
+                      },
+                      sign: {
+                        type: 'string',
+                        enum: ['I', 'E'],
+                        description: 'I=include (default), E=exclude.',
+                      },
+                    },
+                    required: ['low'],
+                  },
+                },
+              },
+              required: ['name', 'values'],
+            },
+          },
+          filters: {
+            type: 'array',
+            description: 'Additional characteristic filters applied on top of variables.',
+            items: {
+              type: 'object',
+              properties: {
+                dimension: {
+                  type: 'string',
+                  description: 'Technical name of the characteristic/dimension (e.g. "0COUNTRY").',
+                },
+                values: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      low: { type: 'string', description: 'Low value.' },
+                      high: { type: 'string', description: 'High value for BT ranges.' },
+                      option: {
+                        type: 'string',
+                        enum: ['EQ', 'BT', 'LT', 'LE', 'GT', 'GE', 'NE'],
+                        description: 'Selection option. Default: EQ.',
+                      },
+                      sign: {
+                        type: 'string',
+                        enum: ['I', 'E'],
+                        description: 'I=include (default), E=exclude.',
+                      },
+                    },
+                    required: ['low'],
+                  },
+                },
+              },
+              required: ['dimension', 'values'],
+            },
+          },
+          rows: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Dimension technical names to place on the row axis. ' +
+              'Use "[Measures]" for the key-figures dimension. ' +
+              'Omit to use the query\'s default layout.',
+          },
+          columns: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Dimension technical names to place on the column axis. ' +
+              'Defaults to ["[Measures]"] when rows are specified but columns are omitted.',
+          },
+          free: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Dimension technical names placed in the free characteristics (filter area, not shown as axis).',
+          },
+          hierarchy_nodes: {
+            type: 'array',
+            description: 'Hierarchy nodes to expand or collapse.',
+            items: {
+              type: 'object',
+              properties: {
+                dimension: { type: 'string', description: 'Dimension technical name.' },
+                node: { type: 'string', description: 'Node key value to expand or collapse.' },
+                action: {
+                  type: 'string',
+                  enum: ['expand', 'collapse'],
+                  description: '"expand" to drill down, "collapse" to roll up.',
+                },
+              },
+              required: ['dimension', 'node', 'action'],
+            },
+          },
+          selected_members: {
+            type: 'array',
+            description: 'Restrict axis output to specific structure members for a dimension.',
+            items: {
+              type: 'object',
+              properties: {
+                dimension: { type: 'string', description: 'Dimension or structure technical name.' },
+                members: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Member technical names to include.',
+                },
+              },
+              required: ['dimension', 'members'],
+            },
+          },
+          max_rows: {
+            type: 'number',
+            description: 'Maximum number of data rows to return (default: 1000).',
+          },
+          start_row: {
+            type: 'number',
+            description: 'Zero-based row offset for pagination (default: 0).',
+          },
+        },
+        required: ['provider_name'],
+      },
+    },
   ],
 }));
 
@@ -1463,6 +1618,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'bw_get_query':
         text = await bwGetQuery(args?.query_name as string);
         break;
+
+      case 'bw_query_data': {
+        const qdParams: QueryDataParams = {
+          provider_name: args?.provider_name as string,
+          provider_type: args?.provider_type as QueryDataParams['provider_type'],
+          variables: args?.variables as QueryDataParams['variables'],
+          filters: args?.filters as QueryDataParams['filters'],
+          rows: args?.rows as string[] | undefined,
+          columns: args?.columns as string[] | undefined,
+          free: args?.free as string[] | undefined,
+          hierarchy_nodes: args?.hierarchy_nodes as QueryDataParams['hierarchy_nodes'],
+          selected_members: args?.selected_members as QueryDataParams['selected_members'],
+          max_rows: args?.max_rows as number | undefined,
+          start_row: args?.start_row as number | undefined,
+        };
+        text = await bwQueryData(qdParams);
+        break;
+      }
 
       default:
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
