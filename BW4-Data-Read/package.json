@@ -1,0 +1,22 @@
+{
+  "name": "bw4-data-read",
+  "version": "0.1.0",
+  "description": "Read-only MCP server for SAP BW/4HANA data access via BICS and ADT REST",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "axios": "^1.7.0",
+    "fast-xml-parser": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "license": "MIT"
+}
